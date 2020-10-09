@@ -145,10 +145,13 @@ and change its power settings.
 
     $ songpal power set quickStartMode on
 
+    $ songpal power on -m c0:ff:ee:00:11:22
+
 .. NOTE::
    For turning on the device the quick boot has to be activated;
-   a patch for adding wake-on-lan support to allow starting the device
-   without quick boot are welcome.
+   If the device is turned off, you can supply the mac address for wake on lan,
+   if the mac addresses are known, you don't need to supply mac addresses yourself.
+
 
 .. WARNING::
    The device seems to report sometimes its status to be off even
