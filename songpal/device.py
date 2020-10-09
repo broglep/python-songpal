@@ -13,7 +13,7 @@ from async_upnp_client.aiohttp import AiohttpRequester
 from async_upnp_client.profiles.dlna import DmrDevice
 
 from didl_lite import didl_lite
-from songpal.common import ProtocolType, SongpalException
+from songpal.common import ProtocolType, SongpalConnectionException, SongpalException
 from songpal.containers import (
     Content,
     ContentInfo,
@@ -35,6 +35,7 @@ from songpal.containers import (
 from songpal.discovery import Discover
 from songpal.notification import ConnectChange, Notification
 from songpal.service import Service
+from wakeonlan import send_magic_packet
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -71,6 +72,8 @@ class Device:
         self.services = {}  # type: Dict[str, Service]
 
         self.callbacks = defaultdict(set)
+
+        self._sysinfo = None
 
         self._upnp_discovery = None
         self._upnp_device = None
@@ -116,7 +119,9 @@ class Device:
                     )
 
                 res_json = await res.json(content_type=None)
-        except (aiohttp.InvalidURL, aiohttp.ClientConnectionError) as ex:
+        except aiohttp.ClientConnectionError as ex:
+            raise SongpalConnectionException(ex)
+        except aiohttp.InvalidURL as ex:
             raise SongpalException("Unable to do POST request: %s" % ex) from ex
 
         if "error" in res_json:
@@ -204,17 +209,57 @@ class Device:
 
     async def get_power(self) -> Power:
         """Get the device state."""
+        if not self.services:
+            # We could not retrieve services, device is offline
+            return Power.make(status=False)
+
         res = await self.services["system"]["getPowerStatus"]()
         return Power.make(**res)
 
-    async def set_power(self, value: bool):
+    async def set_power(self, value: bool, wol: List[str] = None, get_sys_info=False):
         """Toggle the device on and off."""
         if value:
             status = "active"
         else:
             status = "off"
-        # TODO WoL works when quickboot is not enabled
-        return await self.services["system"]["setPowerStatus"](status=status)
+
+        if value is False and get_sys_info is True and self._sysinfo is None:
+            # get sys info to be able to turn device back on
+            try:
+                await self.get_system_info()
+            except Exception:
+                pass
+
+        try:
+            if "system" in self.services:
+                return await self.services["system"]["setPowerStatus"](status=status)
+            else:
+                raise SongpalException("System service not available")
+        except SongpalException as e:
+            if value and (self._sysinfo or wol):
+                if wol:
+                    logging.debug(
+                        "Sending WoL magic packet to supplied mac addresses %s", wol
+                    )
+                    send_magic_packet(*wol)
+                    return
+                if self._sysinfo:
+                    logging.debug(
+                        "Sending WoL magic to known mac addresses %s",
+                        (self._sysinfo.macAddr, self._sysinfo.wirelessMacAddr),
+                    )
+                    send_magic_packet(
+                        *[
+                            mac
+                            for mac in (
+                                self._sysinfo.macAddr,
+                                self._sysinfo.wirelessMacAddr,
+                            )
+                            if mac is not None
+                        ]
+                    )
+                    return
+            raise e
 
     async def get_play_info(self) -> PlayInfo:
         """Return  of the device."""
@@ -277,6 +322,10 @@ class Device:
         return InterfaceInfo.make(**iface)
 
     async def get_system_info(self) -> Sysinfo:
+        self._sysinfo = await self._get_system_info()
+        return self._sysinfo
+
+    async def _get_system_info(self) -> Sysinfo:
         """Return system information including mac addresses and current version."""
 
         if self.services["system"].has_method("getSystemInformation"):

@@ -9,7 +9,7 @@ from functools import update_wrapper
 import click
 
 from songpal import Device, SongpalException
-from songpal.common import ProtocolType
+from songpal.common import ProtocolType, SongpalConnectionException
 from songpal.containers import Setting
 from songpal.discovery import Discover
 from songpal.group import GroupControl
@@ -142,6 +142,13 @@ async def cli(ctx, endpoint, debug, websocket, post):
     x = Device(endpoint, force_protocol=protocol, debug=debug)
     try:
         await x.get_supported_methods()
+    except SongpalConnectionException as ex:
+        if ctx.invoked_subcommand == "power":
+            # device can be offline, allow turning it on
+            pass
+        else:
+            err("Device is offline: %s" % ex)
+            sys.exit(-1)
     except SongpalException as ex:
         err("Unable to get supported methods: %s" % ex)
         sys.exit(-1)
@@ -209,18 +216,25 @@ async def discover(ctx):
 @click.argument("cmd", required=False)
 @click.argument("target", required=False)
 @click.argument("value", required=False)
+@click.option("--mac", "-m", type=str, required=False, multiple=True)
 @pass_dev
 @coro
-async def power(dev: Device, cmd, target, value):
+async def power(dev: Device, cmd, target, value, mac):
     """Turn on and off, control power settings.
 
     Accepts commands 'on', 'off', and 'settings'.
     """
 
+    power = await dev.get_power()
+    if power.status:
+        await dev.set_power(False, get_sys_info=True)
+        await asyncio.sleep(5)
+        await dev.set_power(True)
+
     async def try_turn(cmd):
         state = True if cmd == "on" else False
         try:
-            return await dev.set_power(state)
+            return await dev.set_power(state, wol=mac)
         except SongpalException as ex:
             if ex.code == 3:
                 err("The device is already %s." % cmd)

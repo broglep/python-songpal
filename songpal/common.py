@@ -83,6 +83,19 @@ class SongpalException(Exception):
         return "%s: %s" % (self.message, str(self.error))
 
 
+class SongpalConnectionException(SongpalException):
+    """Custom exception class.
+
+    This is used to indicate that the connection to the device is not possible
+    """
+
+    def __init__(self, exception):
+        """
+        This is used to pass the raw error message from the device.
+        """
+        super().__init__(exception)
+
+
 class ProtocolType(Enum):
     """Protocol used for communication."""
 
